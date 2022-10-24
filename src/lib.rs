@@ -9,6 +9,11 @@ pub struct CommandReference {
 pub struct ArgumentReference {
     inner: InternalReference,
 }
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct FlagReference {
+    inner: InternalReference,
+}
+
 
 impl CommandReference {
     pub fn from(inner: InternalReference) -> Self {
@@ -16,6 +21,11 @@ impl CommandReference {
     }
 }
 impl ArgumentReference {
+    pub fn from(inner: InternalReference) -> Self {
+        Self { inner }
+    }
+}
+impl FlagReference {
     pub fn from(inner: InternalReference) -> Self {
         Self { inner }
     }
@@ -37,6 +47,16 @@ struct Argument {
     short_invoker: Option<String>,
     /// The name of what you put into the argument, used in usage generation
     input: String,
+}
+
+/// Represents a "flag", an argument that doesn't take any input.
+struct Flag {
+    /// The string used to invoke the flag, often prefixed with `--`
+    invoker: String,
+    /// A shorter version of `invoker`, often one character long and prefixed with `-`
+    short_invoker: Option<String>,
+    /// A description of what the flag does, used in usage generation
+    description: String,
 }
 
 /// Represents a "command", something that you tell the program to do.
@@ -88,10 +108,13 @@ pub struct CommandInterface {
     name: String,
     commands: HashMap<CommandReference, Command>,
     arguments: HashMap<ArgumentReference, Argument>,
+    flags: HashMap<FlagReference, Flag>,
     /// Hashmap of potential ways to activate a command to the command UUID
     command_invokers: HashMap<String, CommandReference>,
     /// Hashmap of potential ways to invoke an argument to the argument UUID
     argument_invokers: HashMap<String, ArgumentReference>,
+    /// Hashmap of potential ways to invoke a flag to the flag UUID
+    flag_invokers: HashMap<String, FlagReference>,
 
     /// Is construction complete?
     ready: bool,
@@ -103,8 +126,10 @@ impl CommandInterface {
             name: name.to_string(),
             commands: HashMap::new(),
             arguments: HashMap::new(),
+            flags: HashMap::new(),
             command_invokers: HashMap::new(),
             argument_invokers: HashMap::new(),
+            flag_invokers: HashMap::new(),
             ready: false,
         }
     }
@@ -150,6 +175,26 @@ impl CommandInterface {
         }
         uuid
     }
+    /// Add a flag to the interface.
+    pub fn add_flag(
+        &mut self,
+        invocation: Invoker,
+        description: &str,
+    ) -> FlagReference {
+        assert!(!self.ready, "cannot add flags after construction is complete");
+        let uuid = FlagReference::from(generate_uuid());
+        let (invoker, short_invoker) = invocation.to_full_and_short();
+        self.flags.insert(uuid, Flag {
+            invoker: invoker.clone(),
+            short_invoker: short_invoker.clone(),
+            description: description.to_string(),
+        });
+        self.flag_invokers.insert(invoker, uuid);
+        if let Some(short_invoker) = short_invoker {
+            self.flag_invokers.insert(short_invoker, uuid);
+        }
+        uuid
+    }
 
     /// Finish construction of the interface.
     pub fn finalise(&mut self) {
@@ -161,25 +206,50 @@ impl CommandInterface {
     fn get_command_with_args_from_string_vec(
         &self,
         input: Vec<String>
-    ) -> Result<(CommandReference, Vec<ArgumentReference>), FromInputError> {
+    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
         let command = self.command_invokers.get(&input[0]).ok_or(FromInputError::CommandNotFound)?;
         let mut args = Vec::new();
-        for arg in input[1..].iter() {
-            let arg = self.argument_invokers.get(arg).ok_or(FromInputError::ArgumentNotFound)?;
-            args.push(*arg);
+        let mut active_flags = Vec::new();
+        let mut i = 1;
+        // find all flags
+        while i < input.len() {
+            if let Some(flag) = self.flag_invokers.get(&input[i]) {
+                active_flags.push(*flag);
+            }
+            i += 1;
+        }
+        // remove flags from input
+        let input: Vec<String> = input.into_iter().filter(|s| !self.flag_invokers.contains_key(s)).collect();
+        i = 1;
+        // find all arguments
+        while i < input[1..].len() {
+            // if arg contains a =, remove and split into arg and value
+            // otherwise, take arg as input[i] and value as input[i+1] (fail if input[i+1] doesn't exist)
+            if input[i].contains('=') {
+                let mut split = input[i].split('=');
+                let arg = split.next().unwrap();
+                let value = split.next().unwrap();
+                let arg = self.argument_invokers.get(arg).ok_or(FromInputError::ArgumentNotFound)?;
+                args.push((*arg, value.to_string()));
+                i += 1;
+            } else {
+                let arg = self.argument_invokers.get(&input[i]).ok_or(FromInputError::ArgumentNotFound)?;
+                args.push((*arg, input[i+1].to_string()));
+                i += 2;
+            }
         }
         // assert that all required arguments are present
         let command_inner = self.commands.get(command).unwrap();
         for required_arg in command_inner.required_arguments.iter() {
-            if !args.contains(required_arg) {
-                return Err(FromInputError::ArgumentNotValidInLocation);
+            if !args.iter().any(|(arg, _)| arg == required_arg) {
+                return Err(FromInputError::ArgumentNotFound);
             }
         }
         // assert that no arguments are present twice
         args.sort();
         args.dedup();
 
-        Ok((*command, args))
+        Ok((*command, args, active_flags))
     }
 
     pub fn get_specific_command_usage(&self, command: CommandReference) -> String {
@@ -219,6 +289,19 @@ impl CommandInterface {
 
     pub fn get_all_argument_usage(&self) -> String {
         let mut usage = String::new();
+        for flag in self.flags.keys() {
+            let flag_inner = self.flags.get(flag).unwrap();
+            // if short invoker is present, format as
+            // -s, --long -> description
+            // otherwise, format as
+            // --long -> description
+            if let Some(short_invoker) = flag_inner.short_invoker.as_ref() {
+                usage.push_str(&format!("   {}, {} -> {}\n", short_invoker, flag_inner.invoker, flag_inner.description));
+            } else {
+                usage.push_str(&format!("   {} -> {}\n", flag_inner.invoker, flag_inner.description));
+            }
+            usage.push('\n');
+        }
         for argument in self.arguments.keys() {
             let argument_inner = self.arguments.get(argument).unwrap();
             // if short invoker is present, format as
@@ -243,12 +326,14 @@ impl CommandInterface {
         println!("{}", self.get_all_argument_usage());
     }
 
-    pub fn go(&self) -> Result<(CommandReference, Vec<ArgumentReference>), FromInputError> {
+    pub fn go(&self) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
         let input = std::env::args().collect();
         self.get_command_with_args_from_string_vec(input)
     }
 
-    pub fn go_and_print_usage_on_failure(&self) -> Result<(CommandReference, Vec<ArgumentReference>), FromInputError> {
+    pub fn go_and_print_usage_on_failure(
+        &self
+    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
         let input = std::env::args().collect();
         match self.get_command_with_args_from_string_vec(input) {
             Ok(result) => Ok(result),
@@ -259,7 +344,10 @@ impl CommandInterface {
         }
     }
 
-    pub fn go_fake_args_for_testing(&self, input: Vec<String>) -> Result<(CommandReference, Vec<ArgumentReference>), FromInputError> {
+    pub fn go_fake_args_for_testing(
+        &self,
+        input: Vec<String>
+    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
         self.get_command_with_args_from_string_vec(input)
     }
 }
@@ -280,10 +368,11 @@ mod tests {
         let arg2 = interface.add_argument(Invoker::DashAndDoubleDash("a", "argument"), "nothing");
         let command = interface.add_command(Invoker::Word("do"), vec![arg], "a command to do things");
         let command2 = interface.add_command(Invoker::Word("yeah"), vec![arg2], "a command to do other! things");
+        let flag = interface.add_flag(Invoker::DashAndDoubleDash("f", "flag"), "enables the flag");
         interface.finalise();
-        interface.print_help();
-        let (command_got, args_got) = interface.go_fake_args_for_testing(vec!["do".to_string(), "arg".to_string()]).unwrap();
+        //interface.print_help();
+        let (command_got, args_got, flags_got) = interface.go_fake_args_for_testing(vec!["do".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string()]).unwrap();
         assert_eq!(command, command_got);
-        assert_eq!(vec![arg], args_got);
+        assert_eq!(args_got.len(), 1);
     }
 }
