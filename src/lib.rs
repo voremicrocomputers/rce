@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-type InternalReference = [u8; 16];
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+type InternalReference = u128;
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct CommandReference {
     inner: InternalReference,
 }
@@ -31,12 +31,9 @@ impl FlagReference {
     }
 }
 
-fn generate_uuid() -> InternalReference {
-    let mut uuid = [0; 16];
-    for i in 0..16 {
-        uuid[i] = rand::random();
-    }
-    uuid
+fn generate_uuid(i: &mut u128) -> InternalReference {
+    *i += 1;
+    *i
 }
 
 /// Represents an "argument", an input you give to a command to change its behavior.
@@ -106,9 +103,9 @@ pub enum FromInputError {
 #[derive(Default)]
 pub struct CommandInterface {
     name: String,
-    commands: HashMap<CommandReference, Command>,
-    arguments: HashMap<ArgumentReference, Argument>,
-    flags: HashMap<FlagReference, Flag>,
+    commands: BTreeMap<CommandReference, Command>,
+    arguments: BTreeMap<ArgumentReference, Argument>,
+    flags: BTreeMap<FlagReference, Flag>,
     /// Hashmap of potential ways to activate a command to the command UUID
     command_invokers: HashMap<String, CommandReference>,
     /// Hashmap of potential ways to invoke an argument to the argument UUID
@@ -118,19 +115,23 @@ pub struct CommandInterface {
 
     /// Is construction complete?
     ready: bool,
+
+    /// Internal usage
+    int: u128,
 }
 
 impl CommandInterface {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            commands: HashMap::new(),
-            arguments: HashMap::new(),
-            flags: HashMap::new(),
+            commands: BTreeMap::new(),
+            arguments: BTreeMap::new(),
+            flags: BTreeMap::new(),
             command_invokers: HashMap::new(),
             argument_invokers: HashMap::new(),
             flag_invokers: HashMap::new(),
             ready: false,
+            int: 0,
         }
     }
     /// Add a command to the interface.
@@ -141,7 +142,7 @@ impl CommandInterface {
         description: &str,
     ) -> CommandReference {
         assert!(!self.ready, "cannot add commands after construction is complete");
-        let uuid = CommandReference::from(generate_uuid());
+        let uuid = CommandReference::from(generate_uuid(&mut self.int));
         let (invoker, short_invoker) = invocation.to_full_and_short();
         self.commands.insert(uuid, Command {
             invoker: invoker.clone(),
@@ -162,7 +163,7 @@ impl CommandInterface {
         input: &str,
     ) -> ArgumentReference {
         assert!(!self.ready, "cannot add arguments after construction is complete");
-        let uuid = ArgumentReference::from(generate_uuid());
+        let uuid = ArgumentReference::from(generate_uuid(&mut self.int));
         let (invoker, short_invoker) = invocation.to_full_and_short();
         self.arguments.insert(uuid, Argument {
             invoker: invoker.clone(),
@@ -182,7 +183,7 @@ impl CommandInterface {
         description: &str,
     ) -> FlagReference {
         assert!(!self.ready, "cannot add flags after construction is complete");
-        let uuid = FlagReference::from(generate_uuid());
+        let uuid = FlagReference::from(generate_uuid(&mut self.int));
         let (invoker, short_invoker) = invocation.to_full_and_short();
         self.flags.insert(uuid, Flag {
             invoker: invoker.clone(),
