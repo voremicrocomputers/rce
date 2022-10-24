@@ -293,7 +293,11 @@ impl CommandInterface {
         let mut usage = String::new();
         for command in self.commands.keys() {
             let command_inner = self.commands.get(command).unwrap();
-            usage.push_str(&format!("   {} - {}\n", command_inner.invoker, command_inner.description));
+            if let Some(short_invoker) = &command_inner.short_invoker {
+                usage.push_str(&format!("   {}, {} - {}\n", command_inner.invoker, short_invoker, command_inner.description));
+            } else {
+                usage.push_str(&format!("   {} - {}\n", command_inner.invoker, command_inner.description));
+            }
         }
         usage
     }
