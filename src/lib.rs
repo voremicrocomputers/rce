@@ -120,6 +120,12 @@ pub struct CommandInterface {
     int: u128,
 }
 
+pub struct CommandInput {
+    pub command: CommandReference,
+    pub arguments: HashMap<ArgumentReference, String>,
+    pub flags: Vec<FlagReference>,
+}
+
 impl CommandInterface {
     pub fn new(name: &str) -> Self {
         Self {
@@ -207,7 +213,7 @@ impl CommandInterface {
     fn get_command_with_args_from_string_vec(
         &self,
         input: Vec<String>
-    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
+    ) -> Result<CommandInput, FromInputError> {
         let command = self.command_invokers.get(&input[0]).ok_or(FromInputError::CommandNotFound)?;
         let mut args = Vec::new();
         let mut active_flags = Vec::new();
@@ -250,7 +256,11 @@ impl CommandInterface {
         args.sort();
         args.dedup();
 
-        Ok((*command, args, active_flags))
+        Ok(CommandInput {
+            command: *command,
+            arguments: args.into_iter().collect(),
+            flags: active_flags,
+        })
     }
 
     pub fn get_specific_command_usage(&self, command: CommandReference) -> String {
@@ -327,14 +337,14 @@ impl CommandInterface {
         println!("{}", self.get_all_argument_usage());
     }
 
-    pub fn go(&self) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
+    pub fn go(&self) -> Result<CommandInput, FromInputError> {
         let input = std::env::args().collect();
         self.get_command_with_args_from_string_vec(input)
     }
 
     pub fn go_and_print_usage_on_failure(
         &self
-    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
+    ) -> Result<CommandInput, FromInputError> {
         let input = std::env::args().collect();
         match self.get_command_with_args_from_string_vec(input) {
             Ok(result) => Ok(result),
@@ -348,7 +358,7 @@ impl CommandInterface {
     pub fn go_fake_args_for_testing(
         &self,
         input: Vec<String>
-    ) -> Result<(CommandReference, Vec<(ArgumentReference, String)>, Vec<FlagReference>), FromInputError> {
+    ) -> Result<CommandInput, FromInputError> {
         self.get_command_with_args_from_string_vec(input)
     }
 }
@@ -372,8 +382,8 @@ mod tests {
         let flag = interface.add_flag(Invoker::DashAndDoubleDash("f", "flag"), "enables the flag");
         interface.finalise();
         //interface.print_help();
-        let (command_got, args_got, flags_got) = interface.go_fake_args_for_testing(vec!["do".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string()]).unwrap();
-        assert_eq!(command, command_got);
-        assert_eq!(args_got.len(), 1);
+        let input = interface.go_fake_args_for_testing(vec!["do".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string()]).unwrap();
+        assert_eq!(command, input.command);
+        assert_eq!(input.arguments.len(), 1);
     }
 }
