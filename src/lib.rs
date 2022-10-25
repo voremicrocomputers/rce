@@ -265,8 +265,8 @@ impl CommandInterface {
             // otherwise, take arg as input[i] and value as input[i+1] (fail if input[i+1] doesn't exist)
             if input[i].contains('=') {
                 let mut split = input[i].split('=');
-                let arg = split.next().unwrap();
-                let value = split.next().unwrap();
+                let arg = split.next().unwrap_or("");
+                let value = split.next().unwrap_or("");
                 let arg = self.argument_invokers.get(arg).ok_or(FromInputError::ArgumentNotFound)?;
                 args.push((*arg, value.to_string()));
                 // remove this value from args_not_prefixed
