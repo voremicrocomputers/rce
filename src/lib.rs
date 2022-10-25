@@ -403,9 +403,9 @@ impl CommandInterface {
         println!("{}", self.description);
         println!();
         let commands = self.get_simple_usage();
-        println!("usage: {}{} [arguments]", self.name, {
+        println!("usage: {}{}", self.name, {
             if commands.len() > 0 && !commands.contains("default") {
-                " [command]".to_string()
+                " [command] [arguments]".to_string()
             } else {
                 // check if the default command has any required arguments
                 let default_command = self.commands.iter().find(|(_, v)| v.is_default).unwrap();
@@ -421,7 +421,7 @@ impl CommandInterface {
                         }
                         out
                     };
-                    format!("{}", required_inputs)
+                    format!(" [arguments]{}", required_inputs)
                 } else {
                     "".to_string()
                 }
@@ -482,7 +482,7 @@ mod tests {
         let def_command = interface.add_command(Invoker::Default, vec![arg, arg2], "the default command");
         let flag = interface.add_flag(Invoker::DashAndDoubleDash("f", "flag"), "enables the flag");
         interface.finalise();
-        //interface.print_help();
+        interface.print_help();
         let input = interface.go_fake_args_for_testing(vec!["do".to_string(), "filename".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string(), "output".to_string()]).unwrap();
         let input2 = interface.go_fake_args_for_testing(vec!["filename".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string(), "output".to_string(), "extra".to_string()]).unwrap();
 
