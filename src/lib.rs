@@ -68,6 +68,8 @@ struct Command {
     description: String,
     /// Arguments required for this command
     required_arguments: Vec<ArgumentReference>,
+    /// Is the invoker the default invoker?
+    is_default: bool,
 }
 
 pub enum Invoker<'a> {
@@ -83,6 +85,8 @@ pub enum Invoker<'a> {
     WordAndShortWord(&'a str, &'a str),
     /// Does not have an invoking string, but rather is based on the position of the argument
     NWithoutInvoker(u8),
+    /// Invoke by default, currently only for use with commands
+    Default,
 }
 
 impl<'a> Invoker<'a> {
@@ -94,6 +98,7 @@ impl<'a> Invoker<'a> {
             Invoker::DashAndDoubleDash(short, long) => (format!("--{}", long), Some(format!("-{}", short)), None),
             Invoker::WordAndShortWord(word, short) => (word.to_string(), Some(short.to_string()), None),
             Invoker::NWithoutInvoker(n) => ("".to_string(), None, Some(*n)),
+            Invoker::Default => ("".to_string(), None, None),
         }
     }
 }
@@ -167,6 +172,7 @@ impl CommandInterface {
             short_invoker: short_invoker.clone(),
             description: description.to_string(),
             required_arguments: arguments,
+            is_default: matches!(invocation, Invoker::Default),
         });
         self.command_invokers.insert(invoker, uuid);
         if let Some(short_invoker) = short_invoker {
@@ -227,7 +233,16 @@ impl CommandInterface {
         &self,
         input: Vec<String>
     ) -> Result<CommandInput, FromInputError> {
-        let command = self.command_invokers.get(&input[0]).ok_or(FromInputError::CommandNotFound)?;
+        let mut command = self.command_invokers.get(&input[0]);
+        if command.is_none() {
+            // do we have a default command?
+            let default_command = self.commands.iter().find(|(_, command)| command.is_default);
+            if default_command.is_none() {
+                return Err(FromInputError::CommandNotFound);
+            }
+            command = Some(&default_command.unwrap().0);
+        }
+        let command = command.unwrap();
         let mut args = Vec::new();
         let mut active_flags = Vec::new();
         let mut args_not_prefixed = Vec::new();
@@ -328,6 +343,10 @@ impl CommandInterface {
         let mut usage = String::new();
         for command in self.commands.keys() {
             let command_inner = self.commands.get(command).unwrap();
+            if command_inner.is_default {
+                // skip
+                continue;
+            }
             let required_inputs = {
                 let mut out = String::new();
                 // for each required argument, if it's an NWithoutInvoker, add it to the final string
@@ -435,14 +454,18 @@ mod tests {
         let n_arg2 = interface.add_argument(Invoker::NWithoutInvoker(1), "output");
         let command = interface.add_command(Invoker::Word("do"), vec![arg, n_arg, n_arg2], "a command to do things");
         let command2 = interface.add_command(Invoker::Word("yeah"), vec![arg2], "a command to do other! things");
+        let def_command = interface.add_command(Invoker::Default, vec![arg, arg2], "the default command");
         let flag = interface.add_flag(Invoker::DashAndDoubleDash("f", "flag"), "enables the flag");
         interface.finalise();
-        interface.print_help();
+        //interface.print_help();
         let input = interface.go_fake_args_for_testing(vec!["do".to_string(), "filename".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string(), "output".to_string()]).unwrap();
+        let input2 = interface.go_fake_args_for_testing(vec!["filename".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string(), "output".to_string(), "extra".to_string()]).unwrap();
 
-        println!("{:?}", input);
+        //println!("{:?}", input);
+        //println!("{:?}", input2);
 
         assert_eq!(command, input.command);
         assert_eq!(input.arguments.len(), 1);
+        assert_eq!(def_command, input2.command);
     }
 }
