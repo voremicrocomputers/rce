@@ -42,6 +42,8 @@ struct Argument {
     invoker: String,
     /// A shorter version of `invoker`, often one character long and prefixed with `-`
     short_invoker: Option<String>,
+    /// A potential n value of when this argument should appear if it has no invoker
+    n_value: Option<u8>,
     /// The name of what you put into the argument, used in usage generation
     input: String,
 }
@@ -79,16 +81,19 @@ pub enum Invoker<'a> {
     DashAndDoubleDash(&'a str, &'a str),
     /// A word and a shorter word
     WordAndShortWord(&'a str, &'a str),
+    /// Does not have an invoking string, but rather is based on the position of the argument
+    NWithoutInvoker(u8),
 }
 
 impl<'a> Invoker<'a> {
-    pub fn to_full_and_short(&self) -> (String, Option<String>) {
+    pub fn to_full_and_short(&self) -> (String, Option<String>, Option<u8>) {
         match self {
-            Invoker::Word(word) => (word.to_string(), None),
-            Invoker::Dash(word) => (format!("-{}", word), None),
-            Invoker::DoubleDash(word) => (format!("--{}", word), None),
-            Invoker::DashAndDoubleDash(short, long) => (format!("--{}", long), Some(format!("-{}", short))),
-            Invoker::WordAndShortWord(word, short) => (word.to_string(), Some(short.to_string())),
+            Invoker::Word(word) => (word.to_string(), None, None),
+            Invoker::Dash(word) => (format!("-{}", word), None, None),
+            Invoker::DoubleDash(word) => (format!("--{}", word), None, None),
+            Invoker::DashAndDoubleDash(short, long) => (format!("--{}", long), Some(format!("-{}", short)), None),
+            Invoker::WordAndShortWord(word, short) => (word.to_string(), Some(short.to_string()), None),
+            Invoker::NWithoutInvoker(n) => ("".to_string(), None, Some(*n)),
         }
     }
 }
@@ -103,6 +108,7 @@ pub enum FromInputError {
 #[derive(Default)]
 pub struct CommandInterface {
     name: String,
+    description: String,
     commands: BTreeMap<CommandReference, Command>,
     arguments: BTreeMap<ArgumentReference, Argument>,
     flags: BTreeMap<FlagReference, Flag>,
@@ -112,6 +118,8 @@ pub struct CommandInterface {
     argument_invokers: HashMap<String, ArgumentReference>,
     /// Hashmap of potential ways to invoke a flag to the flag UUID
     flag_invokers: HashMap<String, FlagReference>,
+    /// Hashmap of index to arguments that use an NWithoutInvoker invoker
+    n_arguments: HashMap<u8, ArgumentReference>,
 
     /// Is construction complete?
     ready: bool,
@@ -120,22 +128,26 @@ pub struct CommandInterface {
     int: u128,
 }
 
+#[derive(Debug)]
 pub struct CommandInput {
     pub command: CommandReference,
     pub arguments: HashMap<ArgumentReference, String>,
+    pub inputs: Vec<String>,
     pub flags: Vec<FlagReference>,
 }
 
 impl CommandInterface {
-    pub fn new(name: &str) -> Self {
+    pub fn new(name: &str, description: &str) -> Self {
         Self {
             name: name.to_string(),
+            description: description.to_string(),
             commands: BTreeMap::new(),
             arguments: BTreeMap::new(),
             flags: BTreeMap::new(),
             command_invokers: HashMap::new(),
             argument_invokers: HashMap::new(),
             flag_invokers: HashMap::new(),
+            n_arguments: HashMap::new(),
             ready: false,
             int: 0,
         }
@@ -149,7 +161,7 @@ impl CommandInterface {
     ) -> CommandReference {
         assert!(!self.ready, "cannot add commands after construction is complete");
         let uuid = CommandReference::from(generate_uuid(&mut self.int));
-        let (invoker, short_invoker) = invocation.to_full_and_short();
+        let (invoker, short_invoker, n) = invocation.to_full_and_short();
         self.commands.insert(uuid, Command {
             invoker: invoker.clone(),
             short_invoker: short_invoker.clone(),
@@ -170,10 +182,11 @@ impl CommandInterface {
     ) -> ArgumentReference {
         assert!(!self.ready, "cannot add arguments after construction is complete");
         let uuid = ArgumentReference::from(generate_uuid(&mut self.int));
-        let (invoker, short_invoker) = invocation.to_full_and_short();
+        let (invoker, short_invoker, n) = invocation.to_full_and_short();
         self.arguments.insert(uuid, Argument {
             invoker: invoker.clone(),
             short_invoker: short_invoker.clone(),
+            n_value: n,
             input: input.to_string(),
         });
         self.argument_invokers.insert(invoker, uuid);
@@ -190,7 +203,7 @@ impl CommandInterface {
     ) -> FlagReference {
         assert!(!self.ready, "cannot add flags after construction is complete");
         let uuid = FlagReference::from(generate_uuid(&mut self.int));
-        let (invoker, short_invoker) = invocation.to_full_and_short();
+        let (invoker, short_invoker, n) = invocation.to_full_and_short();
         self.flags.insert(uuid, Flag {
             invoker: invoker.clone(),
             short_invoker: short_invoker.clone(),
@@ -217,11 +230,14 @@ impl CommandInterface {
         let command = self.command_invokers.get(&input[0]).ok_or(FromInputError::CommandNotFound)?;
         let mut args = Vec::new();
         let mut active_flags = Vec::new();
+        let mut args_not_prefixed = Vec::new();
         let mut i = 1;
         // find all flags
         while i < input.len() {
             if let Some(flag) = self.flag_invokers.get(&input[i]) {
                 active_flags.push(*flag);
+            } else {
+                args_not_prefixed.push(input[i].clone());
             }
             i += 1;
         }
@@ -238,17 +254,35 @@ impl CommandInterface {
                 let value = split.next().unwrap();
                 let arg = self.argument_invokers.get(arg).ok_or(FromInputError::ArgumentNotFound)?;
                 args.push((*arg, value.to_string()));
+                // remove this value from args_not_prefixed
+                args_not_prefixed.retain(|s| s != value);
                 i += 1;
-            } else {
+            } else if i < input.len() - 1 && !input[i+1].starts_with('-') && self.argument_invokers.contains_key(&input[i]) {
                 let arg = self.argument_invokers.get(&input[i]).ok_or(FromInputError::ArgumentNotFound)?;
                 args.push((*arg, input[i+1].to_string()));
+                // remove these values from args_not_prefixed
+                args_not_prefixed.retain(|s| s != &input[i] && s != &input[i+1]);
                 i += 2;
+            } else {
+                i += 1;
             }
         }
+
+        // find max nwithoutinvoker value
+        let mut max_n = 0;
+        for arg in self.commands[command].required_arguments.iter() {
+            if let Some(n) = self.arguments[arg].n_value {
+                if n > max_n {
+                    max_n = n;
+                }
+            }
+        }
+
         // assert that all required arguments are present
         let command_inner = self.commands.get(command).unwrap();
         for required_arg in command_inner.required_arguments.iter() {
-            if !args.iter().any(|(arg, _)| arg == required_arg) {
+            if !args.iter().any(|(arg, _)| arg == required_arg) &&
+                args_not_prefixed.len() - 1 < max_n as usize {
                 return Err(FromInputError::ArgumentNotFound);
             }
         }
@@ -259,6 +293,7 @@ impl CommandInterface {
         Ok(CommandInput {
             command: *command,
             arguments: args.into_iter().collect(),
+            inputs: args_not_prefixed,
             flags: active_flags,
         })
     }
@@ -293,10 +328,21 @@ impl CommandInterface {
         let mut usage = String::new();
         for command in self.commands.keys() {
             let command_inner = self.commands.get(command).unwrap();
+            let required_inputs = {
+                let mut out = String::new();
+                // for each required argument, if it's an NWithoutInvoker, add it to the final string
+                for arg in command_inner.required_arguments.iter() {
+                    let arg_inner = self.arguments.get(arg).unwrap();
+                    if arg_inner.n_value.is_some() {
+                        out.push_str(&format!(" <{}>", arg_inner.input));
+                    }
+                }
+                out
+            };
             if let Some(short_invoker) = &command_inner.short_invoker {
-                usage.push_str(&format!("   {}, {} - {}\n", command_inner.invoker, short_invoker, command_inner.description));
+                usage.push_str(&format!("   {}, {}{} - {}\n", command_inner.invoker, short_invoker, required_inputs, command_inner.description));
             } else {
-                usage.push_str(&format!("   {} - {}\n", command_inner.invoker, command_inner.description));
+                usage.push_str(&format!("   {}{} - {}\n", command_inner.invoker, required_inputs, command_inner.description));
             }
         }
         usage
@@ -325,15 +371,19 @@ impl CommandInterface {
             // --long -> description
             if let Some(short_invoker) = argument_inner.short_invoker.as_ref() {
                 usage.push_str(&format!("   {} <{}>, {}[=]<{}>", short_invoker, argument_inner.input, argument_inner.invoker, argument_inner.input));
-            } else {
+                usage.push('\n');
+            } else if argument_inner.n_value.is_none() {
                 usage.push_str(&format!("   {}[=]<{}>", argument_inner.invoker, argument_inner.input));
+                usage.push('\n');
             }
-            usage.push('\n');
         }
         usage
     }
 
     pub fn print_help(&self) {
+        println!("{}", self.name);
+        println!("{}", self.description);
+        println!();
         println!("usage: {} [command] [arguments]", self.name);
         println!("commands:");
         println!("{}", self.get_simple_usage());
@@ -378,15 +428,20 @@ mod tests {
 
     #[test]
     fn try_to_get_fake_arguments() {
-        let mut interface = CommandInterface::new("test");
+        let mut interface = CommandInterface::new("test", "command for testing");
         let arg = interface.add_argument(Invoker::Word("arg"), "nothing");
         let arg2 = interface.add_argument(Invoker::DashAndDoubleDash("a", "argument"), "nothing");
-        let command = interface.add_command(Invoker::Word("do"), vec![arg], "a command to do things");
+        let n_arg = interface.add_argument(Invoker::NWithoutInvoker(0), "file");
+        let n_arg2 = interface.add_argument(Invoker::NWithoutInvoker(1), "output");
+        let command = interface.add_command(Invoker::Word("do"), vec![arg, n_arg, n_arg2], "a command to do things");
         let command2 = interface.add_command(Invoker::Word("yeah"), vec![arg2], "a command to do other! things");
         let flag = interface.add_flag(Invoker::DashAndDoubleDash("f", "flag"), "enables the flag");
         interface.finalise();
-        //interface.print_help();
-        let input = interface.go_fake_args_for_testing(vec!["do".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string()]).unwrap();
+        interface.print_help();
+        let input = interface.go_fake_args_for_testing(vec!["do".to_string(), "filename".to_string(), "arg".to_string(), "val".to_string(), "-f".to_string(), "output".to_string()]).unwrap();
+
+        println!("{:?}", input);
+
         assert_eq!(command, input.command);
         assert_eq!(input.arguments.len(), 1);
     }
