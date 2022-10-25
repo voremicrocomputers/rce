@@ -1,8 +1,10 @@
 [package]
 name = "rce"
-version = "0.1.0"
+description = "library for constructing command-line tools"
+version = "0.0.1"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+authors = ["Real Microsoft", "husky (fekhesk)"]
+homepage = "https://github.com/realmicrosoft/rce"
+repository = "https://github.com/realmicrosoft/rce"
+license = "Apache-2.0"
+readme = "README.md"
