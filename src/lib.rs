@@ -297,7 +297,7 @@ impl CommandInterface {
         let command_inner = self.commands.get(command).unwrap();
         for required_arg in command_inner.required_arguments.iter() {
             if !args.iter().any(|(arg, _)| arg == required_arg) &&
-                args_not_prefixed.len() - 1 < max_n as usize {
+                args_not_prefixed.len() as isize - 1 < max_n as isize {
                 return Err(FromInputError::ArgumentNotFound);
             }
         }
@@ -380,7 +380,6 @@ impl CommandInterface {
             } else {
                 usage.push_str(&format!("   {} -> {}\n", flag_inner.invoker, flag_inner.description));
             }
-            usage.push('\n');
         }
         for argument in self.arguments.keys() {
             let argument_inner = self.arguments.get(argument).unwrap();
@@ -403,9 +402,35 @@ impl CommandInterface {
         println!("{}", self.name);
         println!("{}", self.description);
         println!();
-        println!("usage: {} [command] [arguments]", self.name);
-        println!("commands:");
-        println!("{}", self.get_simple_usage());
+        let commands = self.get_simple_usage();
+        println!("usage: {}{} [arguments]", self.name, {
+            if commands.len() > 0 && !commands.contains("default") {
+                " [command]".to_string()
+            } else {
+                // check if the default command has any required arguments
+                let default_command = self.commands.iter().find(|(_, v)| v.is_default).unwrap();
+                if default_command.1.required_arguments.len() > 0 {
+                    let required_inputs = {
+                        let mut out = String::new();
+                        // for each required argument, if it's an NWithoutInvoker, add it to the final string
+                        for arg in default_command.1.required_arguments.iter() {
+                            let arg_inner = self.arguments.get(arg).unwrap();
+                            if arg_inner.n_value.is_some() {
+                                out.push_str(&format!(" <{}>", arg_inner.input));
+                            }
+                        }
+                        out
+                    };
+                    format!("{}", required_inputs)
+                } else {
+                    "".to_string()
+                }
+            }
+        });
+        if commands.len() > 0 {
+            println!("commands:");
+            println!("{}", commands);
+        }
         println!("arguments:");
         println!("{}", self.get_all_argument_usage());
     }
