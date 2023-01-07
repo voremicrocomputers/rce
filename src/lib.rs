@@ -436,14 +436,18 @@ impl CommandInterface {
     }
 
     pub fn go(&self) -> Result<CommandInput, FromInputError> {
-        let input = std::env::args().collect();
+        let input: Vec<String> = std::env::args().collect();
+        // shift input back by one to remove the program name
+        let input = input[1..].to_vec();
         self.get_command_with_args_from_string_vec(input)
     }
 
     pub fn go_and_print_usage_on_failure(
         &self
     ) -> Result<CommandInput, FromInputError> {
-        let input = std::env::args().collect();
+        let input: Vec<String> = std::env::args().collect();
+        // shift input back by one to remove the program name
+        let input = input[1..].to_vec();
         match self.get_command_with_args_from_string_vec(input) {
             Ok(result) => Ok(result),
             Err(err) => {
