@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 type InternalReference = u128;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -245,14 +245,14 @@ impl CommandInterface {
         let command = command.unwrap();
         let mut args = Vec::new();
         let mut active_flags = Vec::new();
-        let mut args_not_prefixed = Vec::new();
+        let mut args_not_prefixed = VecDeque::new();
         let mut i = 1;
         // find all flags
         while i < input.len() {
             if let Some(flag) = self.flag_invokers.get(&input[i]) {
                 active_flags.push(*flag);
             } else {
-                args_not_prefixed.push(input[i].clone());
+                args_not_prefixed.push_back(input[i].clone());
             }
             i += 1;
         }
@@ -284,11 +284,11 @@ impl CommandInterface {
         }
 
         // find max nwithoutinvoker value
-        let mut max_n = 0;
+        let mut max_n = 0i32;
         for arg in self.commands[command].required_arguments.iter() {
             if let Some(n) = self.arguments[arg].n_value {
-                if n > max_n {
-                    max_n = n;
+                if n > max_n as u8 {
+                    max_n = n as i32;
                 }
             }
         }
@@ -299,6 +299,14 @@ impl CommandInterface {
             if !args.iter().any(|(arg, _)| arg == required_arg) &&
                 args_not_prefixed.len() as isize - 1 < max_n as isize {
                 return Err(FromInputError::ArgumentNotFound);
+            } else {
+                // if we have an argument with n_value, take the next unprefixed value
+                if let Some(n) = self.arguments[required_arg].n_value {
+                    if n as usize <= args_not_prefixed.len() {
+                        args.push((*required_arg, args_not_prefixed.pop_front().unwrap()));
+                        max_n -= 1;
+                    }
+                }
             }
         }
         // assert that no arguments are present twice
@@ -308,7 +316,7 @@ impl CommandInterface {
         Ok(CommandInput {
             command: *command,
             arguments: args.into_iter().collect(),
-            inputs: args_not_prefixed,
+            inputs: args_not_prefixed.into(),
             flags: active_flags,
         })
     }
@@ -494,7 +502,7 @@ mod tests {
         //println!("{:?}", input2);
 
         assert_eq!(command, input.command);
-        assert_eq!(input.arguments.len(), 1);
+        assert_eq!(input.arguments.len(), 3);
         assert_eq!(def_command, input2.command);
     }
 }
